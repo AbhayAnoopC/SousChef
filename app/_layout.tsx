@@ -1,59 +1,43 @@
-import FontAwesome from '@expo/vector-icons/FontAwesome';
-import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
-import { useFonts } from 'expo-font';
-import { Stack } from 'expo-router';
-import * as SplashScreen from 'expo-splash-screen';
+import "../global.css";
 import { useEffect } from 'react';
-import 'react-native-reanimated';
-
-import { useColorScheme } from '@/components/useColorScheme';
-
-export {
-  // Catch any errors thrown by the Layout component.
-  ErrorBoundary,
-} from 'expo-router';
-
-export const unstable_settings = {
-  // Ensure that reloading on `/modal` keeps a back button present.
-  initialRouteName: '(tabs)',
-};
-
-// Prevent the splash screen from auto-hiding before asset loading is complete.
-SplashScreen.preventAutoHideAsync();
+import { Stack, useRouter, useSegments } from 'expo-router'; // Changed Slot to Stack
+import { supabase } from '../lib/supabase';
 
 export default function RootLayout() {
-  const [loaded, error] = useFonts({
-    SpaceMono: require('../assets/fonts/SpaceMono-Regular.ttf'),
-    ...FontAwesome.font,
-  });
-
-  // Expo Router uses Error Boundaries to catch errors in the navigation tree.
-  useEffect(() => {
-    if (error) throw error;
-  }, [error]);
+  const router = useRouter();
+  const segments = useSegments();
 
   useEffect(() => {
-    if (loaded) {
-      SplashScreen.hideAsync();
-    }
-  }, [loaded]);
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      const inAuthGroup = segments[0] === '(tabs)';
 
-  if (!loaded) {
-    return null;
-  }
+      if (session && !inAuthGroup) {
+        router.replace('/(tabs)');
+      } else if (!session && inAuthGroup) {
+        router.replace('/');
+      }
+    });
 
-  return <RootLayoutNav />;
-}
+    return () => subscription.unsubscribe();
+  }, [segments]);
 
-function RootLayoutNav() {
-  const colorScheme = useColorScheme();
-
+  // Using Stack instead of Slot allows for "push" navigation
   return (
-    <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-      <Stack>
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        <Stack.Screen name="modal" options={{ presentation: 'modal' }} />
-      </Stack>
-    </ThemeProvider>
+    <Stack screenOptions={{ headerShown: false }}>
+      {/* This represents your login screen */}
+      <Stack.Screen name="index" /> 
+      
+      {/* This represents your main app tabs */}
+      <Stack.Screen name="(tabs)" /> 
+      
+      {/* This defines how the recipe detail page should appear */}
+      <Stack.Screen 
+        name="recipe/[id]" 
+        options={{ 
+          presentation: 'modal', // Makes it slide up like a sheet
+          animation: 'slide_from_bottom' 
+        }} 
+      />
+    </Stack>
   );
 }

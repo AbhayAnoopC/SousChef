@@ -1,57 +1,38 @@
-import React from 'react';
-import FontAwesome from '@expo/vector-icons/FontAwesome';
-import { Link, Tabs } from 'expo-router';
-import { Pressable } from 'react-native';
-
-import Colors from '@/constants/Colors';
-import { useColorScheme } from '@/components/useColorScheme';
-import { useClientOnlyValue } from '@/components/useClientOnlyValue';
-
-// You can explore the built-in icon families and icons on the web at https://icons.expo.fyi/
-function TabBarIcon(props: {
-  name: React.ComponentProps<typeof FontAwesome>['name'];
-  color: string;
-}) {
-  return <FontAwesome size={28} style={{ marginBottom: -3 }} {...props} />;
-}
-
+import { Tabs } from 'expo-router';
+import { Utensils, Refrigerator, Mic2 } from 'lucide-react-native';
+//Might need to add one fmore screen for grocery list. Tab that shws the grocery oist and allpws users to export the grocery list Or use tha app ass the main grocerylist.
 export default function TabLayout() {
-  const colorScheme = useColorScheme();
-
   return (
-    <Tabs
-      screenOptions={{
-        tabBarActiveTintColor: Colors[colorScheme ?? 'light'].tint,
-        // Disable the static render of the header on web
-        // to prevent a hydration error in React Navigation v6.
-        headerShown: useClientOnlyValue(false, true),
-      }}>
+    <Tabs screenOptions={{ 
+      tabBarActiveTintColor: '#10b981', // Emerald Green
+      headerShown: false,
+      tabBarStyle: {
+        backgroundColor: '#ffffff',
+        borderTopWidth: 1,
+        borderTopColor: '#f3f4f6',
+        height: 60,
+        paddingBottom: 8,
+      }
+    }}>
       <Tabs.Screen
         name="index"
         options={{
-          title: 'Tab One',
-          tabBarIcon: ({ color }) => <TabBarIcon name="code" color={color} />,
-          headerRight: () => (
-            <Link href="/modal" asChild>
-              <Pressable>
-                {({ pressed }) => (
-                  <FontAwesome
-                    name="info-circle"
-                    size={25}
-                    color={Colors[colorScheme ?? 'light'].text}
-                    style={{ marginRight: 15, opacity: pressed ? 0.5 : 1 }}
-                  />
-                )}
-              </Pressable>
-            </Link>
-          ),
+          title: 'Recipes',
+          tabBarIcon: ({ color }) => <Utensils size={24} color={color} />,
         }}
       />
       <Tabs.Screen
-        name="two"
+        name="pantry"
         options={{
-          title: 'Tab Two',
-          tabBarIcon: ({ color }) => <TabBarIcon name="code" color={color} />,
+          title: 'Pantry',
+          tabBarIcon: ({ color }) => <Refrigerator size={24} color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="assistant"
+        options={{
+          title: 'Sous Chef',
+          tabBarIcon: ({ color }) => <Mic2 size={24} color={color} />,
         }}
       />
     </Tabs>

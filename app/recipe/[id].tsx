@@ -1,5 +1,5 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { View, Text, ScrollView, TouchableOpacity, Image } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, Image, ActivityIndicator } from 'react-native';
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
 import { ChevronLeft, Clock, Users } from 'lucide-react-native';
@@ -17,8 +17,14 @@ export default function RecipeDetailScreen() {
     fetchRecipe();
   }, [id]);
 
-  if (!recipe) return <View className="flex-1 bg-surface" />;
-
+if (!recipe) {
+  return (
+    <View className="flex-1 bg-surface justify-center items-center">
+      <ActivityIndicator size="large" color="#10b981" />
+      <Text className="mt-4 text-accent/50 font-medium">Sharpening the knives...</Text>
+    </View>
+  );
+}
   return (
     <ScrollView className="flex-1 bg-surface">
       {/* Header Image */}

@@ -8,6 +8,11 @@ export default function RootLayout() {
   const segments = useSegments();
 
   useEffect(() => {
+    // Subscribe ONCE to auth state changes. Previously this effect re-ran on every
+    // navigation (because `segments` was a dependency), which caused the callback
+    // to execute and *immediately* replace routes when you tried to navigate to
+    // non-(tabs) pages (like `/test` or recipe modals). That is why the screen
+    // briefly slid away then returned.
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       const inAuthGroup = segments[0] === '(tabs)';
 
@@ -19,7 +24,8 @@ export default function RootLayout() {
     });
 
     return () => subscription.unsubscribe();
-  }, [segments]);
+    // Only run once at mount. Don't re-subscribe on navigation changes.
+  }, []);
 
   // Using Stack instead of Slot allows for "push" navigation
   return (

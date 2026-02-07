@@ -1,46 +1,10 @@
-// // 1. Add ThinkingLevel to your imports
-// import { GoogleGenAI, ThinkingLevel } from "@google/genai"; 
-
-// const API_KEY = "AIzaSyCRb68i8aWzjCU62iJdv3xGEmcxjwvDWHI";
-// const ai = new GoogleGenAI({ apiKey: API_KEY });
-
-// export const extractRecipeData = async (inputData: string, isUrl: boolean = true) => {
-//   try {
-//     const response = await ai.models.generateContent({
-//       model: "gemini-3-flash-preview", 
-//       contents: [{
-//         role: "user",
-//         parts: [{
-//           text: `Extract recipe JSON from this ${isUrl ? "URL" : "text"}: ${inputData}. 
-//           Strict JSON Schema: { "title": "string", "ingredients": [{"item": "string", "amount": "string", "unit": "string"}], "instructions": ["string"] }`
-//         }]
-//       }],
-//       config: {
-//         // 2. Use the Enum here instead of the string "low"
-//         thinkingConfig: { 
-//           includeThoughts: false, // Optional: keeps the response clean for JSON parsing
-//           thinkingLevel: ThinkingLevel.LOW 
-//         } 
-//       }
-//     });
-//     // 1. Check if the text actually exists
-//     if (!response.text) {
-//       throw new Error("The AI returned an empty response. This link might be protected.");
-//     }
-//     const cleanedText = response.text
-//       .replace(/```json/g, "")
-//       .replace(/```/g, "")
-//       .trim();
-//     return JSON.parse(cleanedText);
-//   } catch (error) {
-//     console.error("Gemini 3 Error:", error);
-//     throw new Error("Unable to reach the chef's brain.");
-//   }
-// };
-
 import { GoogleGenAI, ThinkingLevel } from "@google/genai";
 
-const API_KEY = "AIzaSyCRb68i8aWzjCU62iJdv3xGEmcxjwvDWHI";
+// Do NOT hard-code API keys. Read from environment variables instead.
+// Use a public-prefixed env var for client-safe keys (e.g. EXPO_PUBLIC_GEMINI_API_KEY)
+// and a private one for server environments (e.g. GENERATIVE_API_KEY).
+const API_KEY = process.env.GENERATIVE_API_KEY || process.env.EXPO_PUBLIC_GEMINI_API_KEY || '';
+if (!API_KEY) console.warn('No Gemini API key found in environment variables. Set GENERATIVE_API_KEY or EXPO_PUBLIC_GEMINI_API_KEY.');
 const ai = new GoogleGenAI({ apiKey: API_KEY });
 
 // Utility for "waiting" between retries
@@ -69,9 +33,69 @@ export const extractRecipeData = async (inputData: string, isUrl: boolean = true
         await sleep(waitTime);
         continue;
       }
+      if (error.status === 403) {
+        throw new Error("API Key Revoked: Google flagged your key as leaked. Please generate a new one in AI Studio.");
+    }
       
       // If it's a different error or we're out of retries, throw it
       throw error;
-    }
+    } 
+  }
+};
+
+export const processCookbookPhotos = async (imageUris: string[]) => {
+  const imageParts = await Promise.all(
+    imageUris.map(async (uri) => {
+      const response = await fetch(uri);
+      const blob = await response.blob();
+      
+      // Convert to base64
+      const base64Data = await new Promise<string>((resolve) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result as string);
+        reader.readAsDataURL(blob);
+      });
+
+      // IMPORTANT: Remove the "data:image/jpeg;base64," prefix
+      const cleanBase64 = base64Data.split(",")[1];
+
+      return {
+        inlineData: {
+          data: cleanBase64,
+          mimeType: "image/jpeg",
+        },
+      };
+    })
+  );
+
+  const prompt = `
+    Analyze these cookbook photos. 
+    1. Extract the Title, Ingredients (list), and Instructions (steps).
+    2. If text spans across pages, merge it into a single logical recipe.
+    3. Ignore handwriting or stains unless they are corrections to the recipe.
+    Return ONLY JSON: { "title": "string", "ingredients": ["string"], "instructions": ["string"] }
+  `;
+
+  try {
+    const result = await ai.models.generateContent({
+      model: "gemini-3-flash-preview",
+      contents: [
+        {
+          role: "user",
+          parts: [
+            { text: prompt },
+            ...imageParts // Passing the inlineData objects directly
+          ],
+        },
+      ],
+    });
+
+    if (!result.text) throw new Error("Empty response from AI");
+
+    const cleanedText = result.text.replace(/```json|```/g, "").trim();
+    return JSON.parse(cleanedText);
+  } catch (error) {
+    console.error("Gemini Vision Error:", error);
+    throw new Error("Gemini couldn't read those pages. Make sure the lighting is good!");
   }
 };

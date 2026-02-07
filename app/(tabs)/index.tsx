@@ -6,6 +6,8 @@ import { extractRecipeData } from '../../lib/gemini';
 import { supabase } from '../../lib/supabase';
 import { scrapeRecipeFromUrl } from '../../lib/scraper';
 import RecipeCard from '../../components/RecipeCard';
+import * as ImagePicker from 'expo-image-picker';
+import { processCookbookPhotos } from '../../lib/gemini'; // We'll update gemini.ts next
 
 export default function HomeScreen() {
   const [modalVisible, setModalVisible] = useState(false);
@@ -13,7 +15,52 @@ export default function HomeScreen() {
   const [loading, setLoading] = useState(false);
   const [recipes, setRecipes] = useState<any[]>([]);
   const router = useRouter();
-  
+  const [importMode, setImportMode] = useState<'url' | 'photo' | null>(null);
+
+
+useEffect(() => {
+  // 1. Initial Load of recipes
+  fetchRecipes();
+
+  // 2. Realtime Listener for the "Flip"
+  const channel = supabase
+    .channel('schema-db-changes')
+    .on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: 'recipes' },
+      (payload) => {
+        console.log('Change received!', payload);
+        
+        if (payload.eventType === 'INSERT') {
+          // Add the "Processing" card to the top of the list
+          setRecipes((current) => [payload.new, ...current]);
+        } else if (payload.eventType === 'UPDATE') {
+          // Update the existing card (flips from "Processing" to the real title)
+          setRecipes((current) =>
+            current.map((r) => (r.id === payload.new.id ? payload.new : r))
+          );
+        } else if (payload.eventType === 'DELETE') {
+          setRecipes((current) => current.filter((r) => r.id !== payload.old.id));
+        }
+      }
+    )
+    .subscribe();
+
+  return () => {
+    supabase.removeChannel(channel);
+  };
+}, []);
+
+const fetchRecipes = async () => {
+  const { data, error } = await supabase
+    .from('recipes')
+    .select('*')
+    .order('created_at', { ascending: false });
+
+  if (!error && data) setRecipes(data);
+};
+
+
 
   const handleImport = async () => {
     setLoading(true);
@@ -43,39 +90,79 @@ export default function HomeScreen() {
     }
   };
 
-  useEffect(() => {
-    // 1. Initial Fetch
-    const fetchRecipes = async () => {
-    console.log("Fetching recipes..."); // Check if this runs
-    const { data, error } = await supabase
-      .from('recipes')
-      .select('*')
-      .order('created_at', { ascending: false });
-    
-    if (error) {
-      console.error("Supabase Fetch Error:", error.message);
+  const handlePhotoImport = async () => {
+  const result = await ImagePicker.launchImageLibraryAsync({
+    allowsMultipleSelection: true,
+    selectionLimit: 4,
+    mediaTypes: ['images'],
+    allowsEditing: false,
+    quality: 0.8,  });
+
+  if (!result.canceled) {
+    setLoading(true);
+    let placeholderId = null;
+
+    try {
+      // 1. Create Placeholder Row
+      const { data: placeholder, error: pError } = await supabase
+        .from('recipes')
+        .insert([{ 
+          title: "Chef is reading cookbook...", 
+          status: "processing",
+          ingredients: [], 
+          instructions: [] 
+        }])
+        .select()
+        .single();
+
+      if (pError) throw pError;
+      placeholderId = placeholder.id;
+
+      // 2. Upload Images to Supabase Storage
+      const imagePaths: string[] = [];
+      
+      for (const [index, asset] of result.assets.entries()) {
+        const fileExt = asset.uri.split('.').pop();
+        const path = `${placeholderId}/page_${index}.jpg`;
+        
+        // Convert URI to Blob for upload
+        const response = await fetch(asset.uri);
+        const blob = await response.blob();
+
+        const { error: uploadError } = await supabase.storage
+          .from('cookbooks')
+          .upload(path, blob, {
+            contentType: 'image/jpeg',
+            upsert: true
+          });
+
+        if (uploadError) throw uploadError;
+        imagePaths.push(path);
+      }
+
+      // 3. Trigger the Edge Function (The "Brain")
+      const { data, error: funcError } = await supabase.functions.invoke('process-cookbook', {
+        body: { recipeId: placeholderId, imagePaths: imagePaths },  
+        headers: {
+          "Authorization": `Bearer ${process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY}` 
+        }
+      });
+
+      if (funcError) throw funcError;
+
+      Alert.alert("Sent to Chef", "Processing started! You can close this; it will update automatically.");
+
+    } catch (err: any) {
+      console.error(err);
+      // Cleanup placeholder if it fails before the function starts
+      if (placeholderId) await supabase.from('recipes').delete().eq('id', placeholderId);
+      Alert.alert("Import Failed", err.message || "Could not connect to server.");
+    } finally {
+      setLoading(false);
+      setModalVisible(false);
     }
-
-    if (data) {
-      console.log("Recipes found:", data.length); // Should say at least 1
-      setRecipes(data);
-    }
-  };
-
-    fetchRecipes();
-
-    // 2. Realtime Listener (The "Superior" Way)
-    const subscription = supabase
-      .channel('public:recipes')
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'recipes' }, (payload) => {
-        setRecipes((current) => [payload.new, ...current]);
-      })
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(subscription);
-    };
-  }, []);
+  }
+};
 
   return (
     <View className="flex-1 bg-surface">
@@ -96,90 +183,78 @@ export default function HomeScreen() {
             <Plus color="white" size={32} />
           </TouchableOpacity>
 
-          {/* The Recipe Grid */}
-          {/* {recipes.map((recipe) => (
-            <TouchableOpacity 
-              key={recipe.id} 
-              className="w-full"
-              onPress={() => router.push("/test")}
-              // onPress={() => {
-              //   console.log("Navigating to recipe:", recipe.id);
-              //   router.push({
-              //     pathname: '/recipe/[id]',
-              //     params: { id: recipe.id }
-              //   });
-              // }}
-              
-            >
-              <RecipeCard 
-                title={recipe.title} 
-                image={recipe.image_url} 
-                ingredientsCount={recipe.ingredients?.length || 0} 
-              />
-            </TouchableOpacity>          
-          ))} */}
 
           {recipes.map((recipe) => (
-            <TouchableOpacity 
-              key={recipe.id} 
-              activeOpacity={0.7} // This makes the card dim when pressed
-              style={{ zIndex: 999, elevation: 5 }} // Forces it to the front
+            <RecipeCard
+              key={recipe.id}
+              title={recipe.title}
+              image={recipe.image_url}
+              ingredientsCount={recipe.ingredients?.length || 0}
+              status={recipe.status}
               onPress={() => {
-                console.log("PRESSED:", recipe.id);
-                Alert.alert("Touch Detected", "The button works!"); // Instant feedback
-                router.push("/test");
+                if (recipe.status === 'processing') {
+                  Alert.alert("Still Cooking!", "The AI is still reading this recipe. Give it a few more seconds.");
+                  return;
+                }
+                console.log("Navigating to:", recipe.id);
+                router.push(`/recipe/${recipe.id}`);
               }}
-            >
-              <RecipeCard 
-                title={recipe.title} 
-                image={recipe.image_url} 
-                ingredientsCount={recipe.ingredients?.length || 0} 
-              />
-            </TouchableOpacity>
+            />
           ))}
         </View>
         {/* Extra space at bottom for scrolling */}
         <View className="h-20" />
       </ScrollView>
 
-      <Modal 
-        animationType="slide" 
-        transparent={true} 
-        visible={modalVisible}
-        onRequestClose={() => setModalVisible(false)}
-      >
-        <View className="flex-1 justify-end bg-black/40">
-          <View className="bg-white p-8 rounded-t-[40px] h-[40%] shadow-2xl">
-            <Text className="text-2xl font-bold text-accent mb-4">Paste Recipe Link</Text>
-            <TextInput 
-              placeholder="Instagram, TikTok, or Blog URL"
-              value={url}
-              onChangeText={setUrl}
-              className="bg-gray-100 p-5 rounded-2xl text-accent mb-6 text-lg"
-              autoFocus
-              placeholderTextColor="#9ca3af"
-            />
-            <TouchableOpacity 
-              onPress={handleImport}
-              className="bg-primary p-5 rounded-2xl items-center shadow-md"
-              disabled={loading}
-            >
-              {loading ? (
-                <ActivityIndicator color="white" />
-              ) : (
-                <Text className="text-white font-bold text-xl">Analyze Recipe</Text>
-              )}
-            </TouchableOpacity>
-            
-            <TouchableOpacity 
-              onPress={() => setModalVisible(false)} 
-              className="mt-6"
-            >
-              <Text className="text-center text-accent/40 font-medium">Cancel</Text>
-            </TouchableOpacity>
+      <Modal visible={modalVisible} animationType="slide" transparent={true}>
+  <View className="flex-1 justify-end bg-black/50">
+    <View className="bg-white p-8 rounded-t-[40px] min-h-[50%]">
+      <Text className="text-2xl font-bold text-accent mb-6 text-center">Import Method</Text>
+      
+      <View className="flex-row justify-between mb-8">
+        {/* URL Option */}
+        <TouchableOpacity 
+          className="bg-gray-50 p-6 rounded-[32px] w-[48%] items-center border border-gray-100"
+          onPress={() => setImportMode('url')}
+        >
+          <View className="bg-primary/10 p-4 rounded-full mb-3">
+            <Plus color="#10b981" size={24} />
           </View>
+          <Text className="font-bold text-accent">Paste Link</Text>
+        </TouchableOpacity>
+
+        {/* Photo Option */}
+        <TouchableOpacity 
+          className="bg-gray-50 p-6 rounded-[32px] w-[48%] items-center border border-gray-100"
+          onPress={handlePhotoImport}
+        >
+          <View className="bg-primary/10 p-4 rounded-full mb-3">
+            <Plus color="#10b981" size={24} />
+          </View>
+          <Text className="font-bold text-accent">Cookbook Photo</Text>
+        </TouchableOpacity>
+      </View>
+
+      {importMode === 'url' && (
+        <View>
+          <TextInput 
+            placeholder="Paste recipe URL..."
+            value={url}
+            onChangeText={setUrl}
+            className="bg-gray-100 p-5 rounded-2xl mb-4"
+          />
+          <TouchableOpacity onPress={handleImport} className="bg-primary p-5 rounded-2xl">
+            <Text className="text-white text-center font-bold">Process Link</Text>
+          </TouchableOpacity>
         </View>
-      </Modal>
+      )}
+
+      <TouchableOpacity onPress={() => {setModalVisible(false); setImportMode(null);}} className="mt-4">
+        <Text className="text-center text-accent/40">Cancel</Text>
+      </TouchableOpacity>
+    </View>
+  </View>
+</Modal>
     </View>
   );
 }

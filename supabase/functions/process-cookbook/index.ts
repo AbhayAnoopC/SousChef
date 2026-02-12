@@ -1,3 +1,5 @@
+import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
+import { encodeBase64 } from "https://deno.land/std@0.224.0/encoding/base64.ts"
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
 const corsHeaders = {
@@ -5,246 +7,149 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-// Helper: Convert ArrayBuffer -> Base64 safely in chunks to avoid call-stack issues
-function arrayBufferToBase64(buffer: ArrayBuffer) {
-  const bytes = new Uint8Array(buffer);
-  let binary = '';
-  const chunkSize = 0x8000; // 32KB
-  for (let i = 0; i < bytes.length; i += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
-  }
-  return btoa(binary);
-}
-
-Deno.serve(async (req: Request)=> {
-  // Handle CORS for the mobile app
-  if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders })
-  }
+serve(async (req) => {
+  if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
 
   try {
     const { recipeId, imagePaths } = await req.json()
-    console.log(`Processing recipe: ${recipeId} with ${imagePaths?.length || 0} images`);
+    const API_KEY = Deno.env.get('GEMINI_API_KEY')
+    const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
 
-    // Initialize Supabase Admin Client
-    const supabase = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
-    )
-
-    // Validate inputs
-    if (!recipeId) throw new Error('Missing recipeId')
-    if (!Array.isArray(imagePaths)) throw new Error('imagePaths must be an array')
-
-    // 1. Download images from Storage and convert to Base64 for Gemini
-    const imageParts = await Promise.all(
-      imagePaths.map(async (path: string) => {
-        console.log(`Downloading: ${path}`);
-        const { data, error } = await supabase.storage.from('cookbooks').download(path)
-        if (error) {
-          console.error(`Storage Error for ${path}:`, error);
-          throw error
-        }
-
-        const arrayBuffer = await data.arrayBuffer()
-        const base64 = arrayBufferToBase64(arrayBuffer)
-
-        return {
-          inlineData: {
-            data: base64,
-            mimeType: "image/jpeg",
-          },
-        }
-      })
-    )
-
-    console.log("Calling Gemini API...");
-    // 2. Call Gemini 3 Flash
-    const prompt = `
-      Analyze the attached image(s). 
-      1. Extract the title, ingredients, and instructions.
-      2. If the image is not a recipe or is unreadable, return ONLY: {"error": "unreadable"}.
-      3. Otherwise, return ONLY valid JSON in this format: 
-        {"title": "string", "ingredients": ["string"], "instructions": ["string"]}
-      4. Keep instructions concise to prevent JSON truncation.
-    `;
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${Deno.env.get('GEMINI_API_KEY')}`
-    // const gRespInitial = await fetch(url, {
-    //   method: 'POST',
-    //   headers: { 'Content-Type': 'application/json' },
-    //   body: JSON.stringify({
-    //     contents: [{ parts: [{ text: prompt }, ...imageParts] }]
-    //   })
-    // })
-    let gResp;
+    // 1. DOWNLOAD IMAGE & CONVERT TO BASE64
+    console.log(`Processing recipe ${recipeId} with image: ${imagePaths?.[0]}`);
     
-    try {
-      // ATTEMPT 1: Inline Base64
-      console.log("Calling Gemini API with inline data...");
-      gResp = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }, ...imageParts] }]
-        })
-      });
-      
-      if (!gResp.ok) throw new Error(`Gemini status: ${gResp.status}`);
-
-    } catch (e) {
-      // ATTEMPT 2: Fallback to Signed URLs
-      console.log("Inline failed, retrying with Signed URLs...");
-      
-      const signedUrls = await Promise.all(
-        imagePaths.map(async (path) => {
-          const { data } = await supabase.storage.from('cookbooks').createSignedUrl(path, 60);
-          return data.signedUrl;
-        })
-      );
-
-      const retryParts = [
-        { text: prompt },
-        ...signedUrls.map((url: any) => ({
-          // IMPORTANT: Tell Gemini it's a JPEG image URL
-          inlineData: {
-            data: "", 
-            mimeType: "image/jpeg",
-            // In late 2025/2026, Gemini API started accepting 'fileUri' or similar 
-            // for signed URLs, but passing it as a text-part URL works as a prompt fallback
-          },
-          text: `Analyze this image: ${url}` 
-        }))
-      ];
-
-      gResp = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contents: [{ parts: retryParts }],
-        generationConfig: {
-          maxOutputTokens: 2048, // Gives enough "paper" to finish the recipe
-          temperature: 0,        // Forces factual accuracy (stops the guessing)
-          responseMimeType: "application/json" // FORCES valid JSON structure
-        } })
-      });
-    }
-    // let gResp = gRespInitial
-    // let gText = await gResp.text();
-
-    // if (!gResp.ok) {
-    //   console.error('Gemini non-OK response:', gResp.status, gResp.statusText, gText.slice(0, 1000));
-
-    //   // If Gemini can't process inline images, retry by providing signed URLs instead
-    //   if (gResp.status === 400 && gText.includes('Unable to process input image')) {
-    //     console.log('Gemini failed to process inline images; attempting retry using signed URLs...');
-
-    //     // Generate temporary signed URLs for each image
-    //     const signedUrls = await Promise.all(
-    //       imagePaths.map(async (path: string) => {
-    //         try {
-    //           const { data: signedData, error: signErr } = await supabase.storage.from('cookbooks').createSignedUrl(path, 60 * 60);
-    //           if (signErr) {
-    //             console.error('Signed URL creation error for', path, signErr);
-    //             throw signErr;
-    //           }
-    //           console.log('Created signed URL for', path);
-    //           return signedData.signedUrl;
-    //         } catch (e) {
-    //           console.error('Failed to create signed URL for', path, e);
-    //           throw e;
-    //         }
-    //       })
-    //     )
-
-    //     // Build a new request body that includes the image URLs as plain text parts
-    //     const urlPartsPayload = {
-    //       contents: [{ parts: [{ text: prompt }, ...signedUrls.map((u: string) => ({ text: u }))] }]
-    //     }
-
-    //     console.log('Retrying Gemini call with URLs (preview):', JSON.stringify(urlPartsPayload).slice(0, 500));
-    //     const retryResp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${Deno.env.get('GEMINI_API_KEY')}`, {
-    //       method: 'POST',
-    //       headers: { 'Content-Type': 'application/json' },
-    //       body: JSON.stringify(urlPartsPayload)
-    //     })
-
-    //     const retryText = await retryResp.text();
-    //     if (!retryResp.ok) {
-    //       console.error('Gemini retry non-OK response:', retryResp.status, retryResp.statusText, retryText.slice(0, 1000));
-    //       throw new Error(`Gemini API responded with ${retryResp.status} on retry`);
-    //     }
-
-    //     // Use the successful retry response
-    //     gResp = retryResp;
-    //     gText = retryText;
-    //   } else {
-    //     throw new Error(`Gemini API responded with ${gResp.status}`);
-    //   }
-    // }
-    let gText = await gResp.text();
-    let aiResult: any;
-    try {
-      aiResult = JSON.parse(gText)
-    } catch (e) {
-      console.error('Failed to parse Gemini response as JSON:', e, gText.slice(0, 1000));
-      throw new Error('Failed to parse Gemini response')
+    if (!imagePaths || !imagePaths.length) {
+      throw new Error("No image paths provided in request");
     }
 
-    console.log("Gemini Response received");
+    const { data: blob, error: dlError } = await supabase.storage.from('cookbooks').download(imagePaths[0])
+    if (dlError) {
+      console.error("Storage download error:", dlError);
+      throw dlError;
+    }
+    
+    if (!blob) {
+      throw new Error("Downloaded blob is empty/null");
+    }
+    console.log(`Downloaded image blob size: ${blob.size} bytes, type: ${blob.type}`);
 
-    // Basic shape checks
-    const rawText = aiResult?.candidates?.[0]?.content?.parts?.[0]?.text
+    if (blob.size === 0) {
+      throw new Error(`The file at '${imagePaths[0]}' is empty (0 bytes). Please check your client-side upload logic.`);
+    }
+
+    const arrayBuffer = await blob.arrayBuffer();
+    const base64Image = encodeBase64(new Uint8Array(arrayBuffer));
+    console.log(`Generated base64 length: ${base64Image.length}`);
+
+    // 2. STEP ONE: GOOGLE VISION OCR (THE EYES)
+    console.log("Starting OCR extraction...")
+    const cleanBase64 = base64Image.replace(/^data:image\/\w+;base64,/, "");
+    
+    if (!cleanBase64 || cleanBase64.length === 0) {
+      throw new Error("Base64 image content is empty");
+    }
+    // Log the first few chars to verify format
+    console.log(`Base64 preview: ${cleanBase64.substring(0, 50)}...`);
+
+    const requestBody = JSON.stringify({
+      requests: [{
+        image: { content: cleanBase64 },
+        features: [{ type: "TEXT_DETECTION" }]
+      }]
+    });
+    
+    // Log body structure (without massive content) for debugging
+    console.log("Request body structure:", JSON.stringify({
+       requests: [{
+        image: { content: `[BASE64_STRING_LEN_${cleanBase64.length}]` },
+        features: [{ type: "TEXT_DETECTION" }]
+      }]
+    }));
+
+    const visionResp = await fetch(`https://vision.googleapis.com/v1/images:annotate?key=${API_KEY}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: requestBody
+    })
+    const visionData = await visionResp.json()
+    const rawText = visionData.responses?.[0]?.fullTextAnnotation?.text
+
     if (!rawText) {
-      console.error('Malformed Gemini response:', JSON.stringify(aiResult).slice(0, 2000));
-      throw new Error('Gemini returned unexpected shape; check function logs for details')
+      console.error("Vision API Error Response:", JSON.stringify(visionData));
+      throw new Error("OCR could not find any text or the response structure was unexpected.");
     }
+    
+    // Log the OCR output so we can confirm it worked
+    console.log("OCR SUCCESS! Extracted Text Preview:", rawText.substring(0, 500));
+    // 3. STEP TWO: GEMINI (THE BRAIN)
+    console.log("Formatting text with Gemini...")
+    const geminiPrompt = `
+      Extract the title, ingredients, and instructions from this raw OCR text. 
+      Return ONLY a JSON object. Do not include any conversational text.
+      
+      Format: {"title": "string", "ingredients": ["string"], "instructions": ["string"]}
+      
+      RAW TEXT:
+      ${rawText}
+    `
 
-    console.log("Raw AI Text length:", rawText.length);
-
-    const jsonMatch = rawText.match(/\{[\s\S]*\}/)
-    if (!jsonMatch) {
-      console.error('No JSON object found in AI text (preview):', rawText.slice(0, 1000));
-      throw new Error('AI did not return a valid JSON object. Check logs for Raw AI Text.')
-    }
-
-    const cleanJson = jsonMatch[0]
-
-    let recipe: any
-    try { 
-      recipe = JSON.parse(cleanJson)
-    } catch (e) {
-      console.error('Failed to parse recipe JSON:', e, cleanJson.slice(0, 1000))
-      throw new Error('Failed to parse recipe JSON from AI output')
-    }
-
-    // 3. Update the database row
-    const { error: updateError } = await supabase
-      .from('recipes')
-      .update({
-        title: recipe.title || "Untitled Recipe",
-        ingredients: recipe.ingredients || [],
-        instructions: recipe.instructions || [],
-        status: 'ready'
+    const geminiResp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${API_KEY}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: geminiPrompt }] }],
+        generationConfig: { 
+          responseMimeType: "application/json",
+          temperature: 0.1
+        }
       })
-      .eq('id', recipeId)
+    })
 
-    if (updateError) {
-      console.error('Database update error:', updateError);
-      throw updateError
-    } else {
-      console.log("Recipe updated successfully!");
+    const geminiData = await geminiResp.json()
+
+    if (geminiData.error) {
+      console.error("Gemini API Error:", JSON.stringify(geminiData.error));
+      throw new Error(`Gemini API Error: ${geminiData.error.message}`);
     }
 
-    return new Response(JSON.stringify({ success: true }), {
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      status: 200,
-    })
+    if (!geminiData.candidates || !geminiData.candidates[0]) {
+      console.error("Gemini Response Structure:", JSON.stringify(geminiData));
+      throw new Error("Gemini returned no candidates (possibly blocked by safety settings).");
+    }
 
-  } catch (error: any) {
-    // Log full error server-side for debugging
-    console.error('Function error:', error?.message || error, error?.stack || '')
-    return new Response(JSON.stringify({ error: (error && error.message) ? error.message : String(error) }), {
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      status: 500,
-    })
+    const rawAiResponse = geminiData.candidates[0].content.parts[0].text;
+    const jsonMatch = rawAiResponse.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      throw new Error("Gemini did not return a valid JSON object.");
+    }
+
+    const recipe = JSON.parse(jsonMatch[0]);
+
+
+    // 4. UPDATE DATABASE
+    console.log(`Updating database for recipe: ${recipeId}`);
+    await supabase.from('recipes').update({
+      title: recipe.title || "Untitled Recipe",
+      ingredients: recipe.ingredients,
+      instructions: recipe.instructions,
+      status: 'ready'
+    }).eq('id', recipeId)
+
+    return new Response(JSON.stringify({ success: true }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+
+  } catch (error) {
+    // This logs the full object to the Supabase Console so you can see it
+    console.error("Full Function Error Object:", error);
+
+    // This ensures you get a readable string back in the response
+    const errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+    
+    return new Response(JSON.stringify({ 
+      error: errorMessage,
+      stack: error instanceof Error ? error.stack : undefined 
+    }), { 
+      status: 500, 
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+    });
   }
 })

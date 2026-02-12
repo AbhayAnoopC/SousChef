@@ -1,6 +1,7 @@
-import "../global.css";
-import { useEffect } from 'react';
 import { Stack, useRouter, useSegments } from 'expo-router'; // Changed Slot to Stack
+import { useEffect } from 'react';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import "../global.css";
 import { supabase } from '../lib/supabase';
 
 export default function RootLayout() {
@@ -29,21 +30,23 @@ export default function RootLayout() {
 
   // Using Stack instead of Slot allows for "push" navigation
   return (
-    <Stack screenOptions={{ headerShown: false }}>
-      {/* This represents your login screen */}
-      <Stack.Screen name="index" /> 
-      
-      {/* This represents your main app tabs */}
-      <Stack.Screen name="(tabs)" /> 
-      
-      {/* This defines how the recipe detail page should appear */}
-      <Stack.Screen 
-        name="recipe/[id]" 
-        options={{ 
-          presentation: 'modal', // Makes it slide up like a sheet
-          animation: 'slide_from_bottom' 
-        }} 
-      />
-    </Stack>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <Stack screenOptions={{ headerShown: false }}>
+        {/* This represents your login screen */}
+        <Stack.Screen name="index" />
+
+        {/* This represents your main app tabs */}
+        <Stack.Screen name="(tabs)" />
+
+        {/* This defines how the recipe detail page should appear */}
+        <Stack.Screen
+          name="recipe/[id]"
+          options={{
+            presentation: 'modal', // Makes it slide up like a sheet
+            animation: 'slide_from_bottom'
+          }}
+        />
+      </Stack>
+    </GestureHandlerRootView>
   );
 }

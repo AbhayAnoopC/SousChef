@@ -5,7 +5,7 @@ import { supabase } from './supabase';
  * Signs in a user with email and password.
  */
 export const signInWithEmail = async (email: string, password: string) => {
-  const { error } = await supabase.auth.signInWithPassword({
+  const { data, error } = await supabase.auth.signInWithPassword({
     email,
     password,
   });
@@ -14,26 +14,14 @@ export const signInWithEmail = async (email: string, password: string) => {
     Alert.alert("Login Error", error.message);
     return { success: false, error };
   }
-  return { success: true };
+  return { success: !!data.session && !error, error, session: data.session };
 };
 
 /**
  * Signs up a new user and sends a confirmation email.
  */
-export const signUpWithEmail = async (email: string, password: string) => {
-  const { data: { session }, error } = await supabase.auth.signUp({
-    email,
-    password,
-  });
-
-  if (error) {
-    Alert.alert("Sign Up Error", error.message);
-    return { success: false, error };
-  } 
-  
-  if (!session) {
-    Alert.alert("Check your inbox!", "We've sent a verification link to your email.");
-  }
-  
-  return { success: true, session };
-};
+export async function signUpWithEmail(email: string, password: string) {
+  const { data, error } = await supabase.auth.signUp({ email, password });
+  // Note: data.session can be null if email confirmation is required
+  return { success: !error, error, session: data.session };
+}

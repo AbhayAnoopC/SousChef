@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
 import { useRouter } from 'expo-router';
+import { useState } from 'react';
+import { ActivityIndicator, Alert, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { signUpWithEmail } from '../lib/auth';
 
 export default function SignUpScreen() {
@@ -17,14 +17,28 @@ export default function SignUpScreen() {
     }
 
     setLoading(true);
-    // Note: We'll pass fullName in the metadata so our Supabase trigger catches it
-    const { success } = await signUpWithEmail(email, password);
+    const { success, error, session } = await signUpWithEmail(email, password);
     setLoading(false);
 
-    if (success) {
-      router.back(); // Go back to login after successful signup
+    if (!success) {
+      Alert.alert("Signup failed", error?.message ?? "Unknown error");
+      return;
     }
+
+    if (!session) {
+      Alert.alert(
+        "Check your email",
+        "You may need to confirm your email before you can log in."
+      );
+      router.back();
+      return;
+    }
+
+    // If session exists, route like login does:
+    //router.replace("/onboarding");
+    router.replace('/(tabs)');
   };
+
 
   return (
     <View className="flex-1 bg-surface px-8 justify-center">
@@ -32,28 +46,28 @@ export default function SignUpScreen() {
       <Text className="text-lg text-accent/60 mb-10">Create an account to start cooking.</Text>
 
       <View className="space-y-4">
-        <TextInput 
-          placeholder="Full Name" 
+        <TextInput
+          placeholder="Full Name"
           value={fullName}
           onChangeText={setFullName}
           className="bg-white p-5 rounded-2xl border border-gray-200 text-accent text-lg shadow-sm"
         />
-        <TextInput 
-          placeholder="Email Address" 
+        <TextInput
+          placeholder="Email Address"
           value={email}
           onChangeText={setEmail}
           autoCapitalize="none"
           className="bg-white p-5 rounded-2xl border border-gray-200 text-accent text-lg shadow-sm mt-4"
         />
-        <TextInput 
-          placeholder="Password" 
+        <TextInput
+          placeholder="Password"
           value={password}
           onChangeText={setPassword}
           secureTextEntry
           className="bg-white p-5 rounded-2xl border border-gray-200 text-accent text-lg shadow-sm mt-4"
         />
 
-        <TouchableOpacity 
+        <TouchableOpacity
           onPress={handleSignUp}
           disabled={loading}
           className="bg-primary p-5 rounded-2xl shadow-md mt-6 flex-row justify-center"

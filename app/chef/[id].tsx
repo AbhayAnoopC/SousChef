@@ -1,359 +1,191 @@
-// import { Audio } from 'expo-av';
-// import { useLocalSearchParams } from 'expo-router';
-// import * as Speech from 'expo-speech';
-// import { useEffect, useState } from 'react';
-// import { Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-// import { supabase } from '../../lib/supabase';
-
-// interface Recipe {
-//     id: number;
-//     title: string;
-//     description: string;
-//     instructions: string[];
-//     ingredients: string[];
-//     image_url: string;
-// }
-
-// export default function ChefScreen() {
-//     const { id } = useLocalSearchParams();
-//     const [recipe, setRecipe] = useState<Recipe | null>(null);
-//     const [currentStep, setCurrentStep] = useState(0);
-//     const [recording, setRecording] = useState<Audio.Recording | null>(null);
-//     const [isProcessing, setIsProcessing] = useState(false);
-//     const [assistantText, setAssistantText] = useState('');
-//     const [selectedVoice, setSelectedVoice] = useState<string | undefined>(undefined);
-
-//     // EFFECT 1: Load recipe and existing session on mount
-//     useEffect(() => {
-//         const initializeChef = async () => {
-//             // Fetch Recipe
-//             const { data: recipeData } = await supabase.from('recipes').select('*').eq('id', id).single();
-//             if (recipeData) setRecipe(recipeData);
-
-//             // Fetch Previous Session to resume where we left off
-//             const { data: sessionData } = await supabase
-//                 .from('cooking_sessions')
-//                 .select('current_step')
-//                 .eq('recipe_id', id)
-//                 .single();
-
-//             if (sessionData) {
-//                 setCurrentStep(sessionData.current_step);
-//             }
-//         };
-
-//         initializeChef();
-//     }, [id]);
-
-//     // EFFECT 2: Sync to Supabase whenever the user moves to a new step
-//     useEffect(() => {
-//         if (recipe) {
-//             const syncProgress = async () => {
-//                 await supabase
-//                     .from('cooking_sessions')
-//                     .upsert({
-//                         recipe_id: id,
-//                         current_step: currentStep,
-//                         last_updated: new Date().toISOString(),
-//                         is_active: true
-//                     }, { onConflict: 'recipe_id' });
-//             };
-//             syncProgress();
-//         }
-//     }, [currentStep, recipe]);
-
-// async function startRecording() {
-//     try {
-//         // INTERRUPT: Stop any current speech before starting a new recording
-//         await Speech.stop();
-//         // 1. Request Permissions
-//         const permission = await Audio.requestPermissionsAsync();
-//         if (permission.status !== 'granted') return;
-
-//         // 2. Configure Audio Mode for iOS
-//         await Audio.setAudioModeAsync({
-//             allowsRecordingIOS: true,
-//             playsInSilentModeIOS: true,
-//         });
-
-//         // 3. Prepare & Start
-//         const { recording } = await Audio.Recording.createAsync(
-//             Audio.RecordingOptionsPresets.HIGH_QUALITY
-//         );
-//         setRecording(recording);
-//         console.log('Recording started');
-//     } catch (err) {
-//         console.error('Failed to start recording', err);
-//     }
-// }
-
-// async function stopRecording() {
-//     if (!recording || !recipe) return;
-//     setRecording(null);
-//     setIsProcessing(true);
-
-//     try {
-//         await recording.stopAndUnloadAsync();
-//         // This forces the audio back to the main speaker and increases volume
-//         await Audio.setAudioModeAsync({
-//             allowsRecordingIOS: false,
-//             playsInSilentModeIOS: true,
-//             // InterruptionModeIOS.DoNotMix ensures we have full control
-//             interruptionModeIOS: 1,
-//             // This is the "Magic" setting for iOS speaker output
-//             shouldDuckAndroid: true,
-//             playThroughEarpieceAndroid: false,
-//         });
-//         const uri = recording.getURI();
-//         console.log('Recording stopped. File at:', uri);
-
-//         // Create Form Data
-//         const formData = new FormData();
-//         // @ts-ignore (React Native FormData requires this structure for files)
-//         formData.append('file', {
-//             uri: uri,
-//             name: 'recording.m4a',
-//             type: 'audio/m4a',
-//         });
-//         formData.append('currentStep', currentStep.toString());
-//         formData.append('recipeContext', JSON.stringify(recipe));
-//         const { data, error } = await supabase.functions.invoke('process-voice', {
-//             body: formData,
-//             //headers: { 'Content-Type': 'multipart/form-data' }
-//         });
-//         if (data) {
-//             console.log("AI Response:", data);
-
-//             // 1. Handle Navigation
-//             if (data.action === "NEXT_STEP") {
-//                 setCurrentStep(prev => Math.min(prev + 1, recipe.instructions.length - 1));
-//             } else if (data.action === "PREVIOUS_STEP") {
-//                 setCurrentStep(prev => Math.max(prev - 1, 0));
-//             }
-
-//             // 2. Talk Back
-//             if (data.answer) {
-//                 // Re-confirm audio mode right before speaking
-//                 await Audio.setAudioModeAsync({ allowsRecordingIOS: false });
-//                 if (Platform.OS === 'ios') {
-//                     await Audio.setAudioModeAsync({
-//                         allowsRecordingIOS: false,
-//                         playsInSilentModeIOS: true,
-//                     });
-//                 }
-//                 Speech.speak(data.answer, { voice: selectedVoice, pitch: 1.0, rate: 0.95, volume: 1.0 });
-//             }
-//         }
-
-//         if (error) {
-//             console.error("Supabase function error:", error);
-//             return;
-//         }
-
-//         if (!data) {
-//             console.error("No data returned from AI");
-//             return;
-//         }
-
-//         if (data.transcript) {
-//             console.log("Heard:", data.transcript);
-//             // Logic for handling the text response will go here
-//         } else {
-//             console.log("No transcript returned");
-//         }
-
-//         if (data.action === "NEXT_STEP") {
-//             setCurrentStep(prev => Math.min(prev + 1, recipe.instructions.length - 1));
-//         } else if (data.action === "PREVIOUS_STEP") {
-//             setCurrentStep(prev => Math.max(prev - 1, 0));
-//         }
-
-//         // Show the AI's answer on screen
-//         if (data.answer) {
-//             setAssistantText(data.answer);
-//             Speech.speak(data.answer, { voice: selectedVoice, pitch: 1.0, rate: 0.95, volume: 1.0 });
-//         } else {
-//             console.log("No answer from AI");
-//         }
-
-//     } catch (error) {
-//         console.error('Voice processing error', error);
-//     } finally {
-//         setIsProcessing(false);
-//     }
-// }
-
-//     useEffect(() => {
-//         const getVoices = async () => {
-//             const voices = await Speech.getAvailableVoicesAsync();
-//             // Look for 'en-us' and 'premium' or 'enhanced' in the name
-//             const betterVoice = voices.find(v => v.language === 'en-US' && v.name.includes('Enhanced'));
-//             if (betterVoice) setSelectedVoice(betterVoice.identifier);
-//         };
-//         getVoices();
-//         fetchRecipe();
-//     }, [id]);
-
-
-
-//     const fetchRecipe = async () => {
-//         const { data } = await supabase.from('recipes').select('*').eq('id', id).single();
-//         if (data) setRecipe(data);
-//     };
-
-//     if (!recipe) return <View style={styles.centered}><Text>Loading...</Text></View>;
-
-//     return (
-//         <View style={styles.container}>
-//             <Text style={styles.header}>{recipe.title}</Text>
-
-//             <ScrollView contentContainerStyle={styles.scrollContent}>
-//                 {recipe.instructions.map((step, index) => (
-//                     <View
-//                         key={index}
-//                         style={[
-//                             styles.stepCard,
-//                             index === currentStep && styles.activeStepCard
-//                         ]}
-//                     >
-//                         <Text style={[styles.stepNumber, index === currentStep && styles.activeText]}>
-//                             Step {index + 1}
-//                         </Text>
-//                         <Text style={[styles.stepText, index === currentStep && styles.activeText]}>
-//                             {step}
-//                         </Text>
-//                     </View>
-//                 ))}
-//             </ScrollView>
-
-//             {/* Placeholder for Voice Control (Milestone 3) */}
-//             <View className="absolute bottom-0 w-full p-8 bg-white/90">
-//                 <TouchableOpacity
-//                     onLongPress={startRecording} // Press and hold starts
-//                     onPressOut={stopRecording}   // Release stops
-//                     delayLongPress={50}          // Makes it feel instant
-//                     disabled={isProcessing}
-//                     className={`h-24 rounded-full justify-center items-center shadow-lg ${recording ? 'bg-red-500 scale-105' : 'bg-accent'
-//                         } ${isProcessing ? 'opacity-50' : ''}`}
-//                 >
-//                     <Text className="text-white text-xl font-bold">
-//                         {recording ? 'Listening...' : isProcessing ? 'Thinking...' : 'Hold to Talk'}
-//                     </Text>
-//                 </TouchableOpacity>
-//             </View>
-//         </View>
-//     );
-// }
-
-// const styles = StyleSheet.create({
-//     container: { flex: 1, backgroundColor: '#FFF' },
-//     header: { fontSize: 22, fontWeight: 'bold', padding: 20, borderBottomWidth: 1, borderBottomColor: '#EEE' },
-//     scrollContent: { padding: 20, paddingBottom: 120 },
-//     stepCard: {
-//         padding: 15,
-//         borderRadius: 12,
-//         backgroundColor: '#F9F9F9',
-//         marginBottom: 15,
-//         borderWidth: 1,
-//         borderColor: '#EEE'
-//     },
-//     activeStepCard: {
-//         backgroundColor: '#FFF4F2',
-//         borderColor: '#FF6347',
-//         elevation: 4,
-//         shadowColor: '#000',
-//         shadowOffset: { width: 0, height: 2 },
-//         shadowOpacity: 0.1,
-//         shadowRadius: 4,
-//     },
-//     stepNumber: { fontSize: 14, fontWeight: 'bold', color: '#999', marginBottom: 4 },
-//     stepText: { fontSize: 18, lineHeight: 26, color: '#333' },
-//     activeText: { color: '#FF6347' },
-//     footer: {
-//         position: 'absolute',
-//         bottom: 0,
-//         width: '100%',
-//         padding: 30,
-//         backgroundColor: 'rgba(255,255,255,0.9)'
-//     },
-//     talkButton: {
-//         backgroundColor: '#333',
-//         height: 80,
-//         borderRadius: 40,
-//         justifyContent: 'center',
-//         alignItems: 'center'
-//     },
-//     talkButtonText: { color: 'white', fontSize: 20, fontWeight: 'bold' },
-//     centered: { flex: 1, justifyContent: 'center', alignItems: 'center' }
-// });
-
 import { Audio } from 'expo-av';
-import { useLocalSearchParams } from 'expo-router';
+import * as Haptics from 'expo-haptics';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as Speech from 'expo-speech';
-import { List, Mic, Volume2, VolumeX } from 'lucide-react-native';
+import { List, MessageCircle, Mic, Volume2, VolumeX, X } from 'lucide-react-native';
 import { useEffect, useRef, useState } from 'react';
-import { Dimensions, Platform, ScrollView, Text, TouchableOpacity, View } from 'react-native';
+import { Animated, Modal, Platform, ScrollView, Text, TouchableOpacity, View } from 'react-native';
 import { supabase } from '../../lib/supabase';
-
-interface Recipe {
-    id: number;
-    title: string;
-    description: string;
-    instructions: string[];
-    ingredients: string[];
-    image_url: string;
-}
-
-const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 
 export default function ChefScreen() {
     const { id } = useLocalSearchParams();
+    const router = useRouter();
     const [recipe, setRecipe] = useState<any>(null);
     const [currentStep, setCurrentStep] = useState(0);
     const [isMuted, setIsMuted] = useState(false);
+    const [showChat, setShowChat] = useState(false);
     const [showIngredients, setShowIngredients] = useState(false);
-    const [messages, setMessages] = useState<{ role: 'user' | 'assistant', text: string }[]>([]);
+    const [messages, setMessages] = useState<any[]>([]);
     const [isProcessing, setIsProcessing] = useState(false);
-    const scrollRef = useRef<ScrollView>(null);
-
-    //     const [recipe, setRecipe] = useState<Recipe | null>(null);
     const [recording, setRecording] = useState<Audio.Recording | null>(null);
-    // const [isProcessing, setIsProcessing] = useState(false);
-    const [assistantText, setAssistantText] = useState('');
     const [selectedVoice, setSelectedVoice] = useState<string | undefined>(undefined);
+    const chatSyncTimeout = useRef<any>(null);
 
-    // Load Recipe & Session
+    const pulseAnim = useRef(new Animated.Value(1)).current;
+    const scrollRef = useRef<ScrollView>(null);
+    const scrollToBottom = () => {
+        requestAnimationFrame(() => {
+            scrollRef.current?.scrollToEnd({ animated: true });
+        });
+    };
+    useEffect(() => {
+        if (showChat) {
+            scrollToBottom();
+        }
+    }, [showChat]);
+
+    useEffect(() => {
+        if (showChat && messages.length > 0) {
+            scrollToBottom();
+        }
+    }, [messages, showChat]);
+
+
+    const isMutedRef = useRef(isMuted);
+    useEffect(() => {
+        isMutedRef.current = isMuted;
+    }, [isMuted]);
+
+
+    // 1. Load Data & Persistent Session
     useEffect(() => {
         const loadData = async () => {
             const { data: rec } = await supabase.from('recipes').select('*').eq('id', id).single();
             if (rec) setRecipe(rec);
 
-            const { data: ses } = await supabase.from('cooking_sessions').select('current_step').eq('recipe_id', id).maybeSingle();
-            if (ses) setCurrentStep(ses.current_step);
+            const { data: ses } = await supabase.from('cooking_sessions')
+                .select('current_step, chat_history')
+                .eq('recipe_id', id)
+                .maybeSingle();
+
+            if (ses) {
+                setCurrentStep(ses.current_step || 0);
+                setMessages(ses.chat_history || []);
+            }
         };
         loadData();
     }, [id]);
 
-    // Sync Progress
+    // useEffect(() => {
+    //     if (!recipe) return;
+
+    //     supabase
+    //         .from('cooking_sessions')
+    //         .upsert(
+    //             {
+    //                 recipe_id: id,
+    //                 is_active: true,
+    //                 last_updated: new Date().toISOString(),
+    //             },
+    //             { onConflict: 'recipe_id' }
+    //         )
+    //         .then(({ error }) => {
+    //             if (error) console.error('activate session error:', error);
+    //         });
+    // }, [recipe, id]);
+
+    // 2. Sync Progress & Chat History to Supabase
+    // useEffect(() => {
+    //     if (recipe) {
+    //         supabase.from('cooking_sessions').upsert({
+    //             recipe_id: id,
+    //             current_step: currentStep,
+    //             chat_history: messages, // Now saving chat
+    //             last_updated: new Date().toISOString(),
+    //             is_active: true
+    //         }, { onConflict: 'recipe_id' }).then();
+    //     }
+    // }, [currentStep, messages]);
     useEffect(() => {
-        if (recipe) {
-            supabase.from('cooking_sessions').upsert({
+        if (!recipe) return;
+
+        supabase
+            .from('cooking_sessions')
+            .upsert({
                 recipe_id: id,
                 current_step: currentStep,
                 last_updated: new Date().toISOString(),
                 is_active: true
-            }, { onConflict: 'recipe_id' }).then();
-        }
-    }, [currentStep]);
+            }, { onConflict: 'recipe_id' })
+            .then(({ error }) => {
+                if (error) console.error("step sync error:", error);
+            });
+    }, [currentStep, recipe, id]);
 
     useEffect(() => {
-        // Automatically scroll to the bottom of the conversation when messages update
-        if (scrollRef.current) {
-            setTimeout(() => {
-                scrollRef.current?.scrollToEnd({ animated: true });
-            }, 100);
+        if (recording || isProcessing) {
+            Animated.loop(
+                Animated.sequence([
+                    Animated.timing(pulseAnim, {
+                        toValue: 1.08,
+                        duration: 500,
+                        useNativeDriver: true,
+                    }),
+                    Animated.timing(pulseAnim, {
+                        toValue: 1,
+                        duration: 500,
+                        useNativeDriver: true,
+                    }),
+                ])
+            ).start();
+        } else {
+            pulseAnim.stopAnimation();
+            pulseAnim.setValue(1);
         }
-    }, [messages]);
+    }, [recording, isProcessing, pulseAnim]);
+
+
+    useEffect(() => {
+        if (!recipe) return;
+
+        if (chatSyncTimeout.current) {
+            clearTimeout(chatSyncTimeout.current);
+        }
+
+        chatSyncTimeout.current = setTimeout(() => {
+            supabase
+                .from('cooking_sessions')
+                .upsert({
+                    recipe_id: id,
+                    chat_history: messages,
+                    last_updated: new Date().toISOString(),
+                    is_active: true
+                }, { onConflict: 'recipe_id' })
+                .then(({ error }) => {
+                    if (error) console.error("chat sync error:", error);
+                });
+        }, 800);
+
+        return () => {
+            if (chatSyncTimeout.current) clearTimeout(chatSyncTimeout.current);
+        };
+    }, [messages, recipe, id]);
+
+    useEffect(() => {
+        if (isMuted) {
+            Speech.stop();
+        }
+    }, [isMuted]);
+
+    useEffect(() => {
+        (async () => {
+            try {
+                const voices = await Speech.getAvailableVoicesAsync();
+                const english = voices.filter(v => v.language?.startsWith('en'));
+
+                const enhanced =
+                    english.find(v => (v as any).quality === 'Enhanced') ||
+                    english.find(v => v.identifier?.toLowerCase().includes('siri')) ||
+                    english[0];
+
+                if (enhanced?.identifier) setSelectedVoice(enhanced.identifier);
+            } catch (e) {
+                console.log("Could not load voices", e);
+            }
+        })();
+    }, []);
+
+
 
     const handleVoiceResponse = (data: any) => {
         if (data.answer) {
@@ -366,50 +198,54 @@ export default function ChefScreen() {
         if (data.action === "PREVIOUS_STEP") setCurrentStep(p => Math.max(p - 1, 0));
     };
 
-    if (!recipe) return <View className="flex-1 justify-center items-center"><Text>Loading...</Text></View>;
+    const setRecordingAudioMode = async () => {
+        await Audio.setAudioModeAsync({
+            allowsRecordingIOS: true,
+            playsInSilentModeIOS: true,
+            staysActiveInBackground: false,
+            shouldDuckAndroid: true,
+            playThroughEarpieceAndroid: false,
+        });
+    };
 
-    async function startRecording() {
-        try {
-            // INTERRUPT: Stop any current speech before starting a new recording
-            await Speech.stop();
-            // 1. Request Permissions
-            const permission = await Audio.requestPermissionsAsync();
-            if (permission.status !== 'granted') return;
-
-            // 2. Configure Audio Mode for iOS
-            await Audio.setAudioModeAsync({
-                allowsRecordingIOS: true,
-                playsInSilentModeIOS: true,
-            });
-
-            // 3. Prepare & Start
-            const { recording } = await Audio.Recording.createAsync(
-                Audio.RecordingOptionsPresets.HIGH_QUALITY
-            );
-            setRecording(recording);
-            console.log('Recording started');
-        } catch (err) {
-            console.error('Failed to start recording', err);
-        }
-    }
-
+    const setPlaybackAudioMode = async () => {
+        await Audio.setAudioModeAsync({
+            allowsRecordingIOS: false,
+            playsInSilentModeIOS: true,
+            staysActiveInBackground: false,
+            shouldDuckAndroid: true,
+            playThroughEarpieceAndroid: false,
+        });
+    };
     async function stopRecording() {
         if (!recording || !recipe) return;
-        setRecording(null);
+        // setRecording(null);
         setIsProcessing(true);
+
+        const cleanForSpeech = (text: string) => {
+            return text
+                .replace(/\s+/g, ' ')
+                .replace(/•/g, '')
+                .replace(/\b(\d+)\)/g, 'Step $1.')
+                .trim();
+        };
+
 
         try {
             await recording.stopAndUnloadAsync();
+            setRecording(null);
+            await setPlaybackAudioMode();
+
             // This forces the audio back to the main speaker and increases volume
-            await Audio.setAudioModeAsync({
-                allowsRecordingIOS: false,
-                playsInSilentModeIOS: true,
-                // InterruptionModeIOS.DoNotMix ensures we have full control
-                interruptionModeIOS: 1,
-                // This is the "Magic" setting for iOS speaker output
-                shouldDuckAndroid: true,
-                playThroughEarpieceAndroid: false,
-            });
+            // await Audio.setAudioModeAsync({
+            //     allowsRecordingIOS: false,
+            //     playsInSilentModeIOS: true,
+            //     // InterruptionModeIOS.DoNotMix ensures we have full control
+            //     interruptionModeIOS: 1,
+            //     // This is the "Magic" setting for iOS speaker output
+            //     shouldDuckAndroid: true,
+            //     playThroughEarpieceAndroid: false,
+            // });
             const uri = recording.getURI();
             console.log('Recording stopped. File at:', uri);
 
@@ -451,7 +287,7 @@ export default function ChefScreen() {
                 }
 
                 // 2. Talk Back
-                if (data.answer && !isMuted) {
+                if (data.answer && !isMutedRef.current) {
                     // Re-confirm audio mode right before speaking
                     await Audio.setAudioModeAsync({ allowsRecordingIOS: false });
                     if (Platform.OS === 'ios') {
@@ -460,7 +296,15 @@ export default function ChefScreen() {
                             playsInSilentModeIOS: true,
                         });
                     }
-                    Speech.speak(data.answer, { voice: selectedVoice, pitch: 1.0, rate: 0.95, volume: 1.0 });
+                    //Speech.speak(data.answer, { voice: selectedVoice, pitch: 1.0, rate: 0.95, volume: 1.0 });
+                    await Speech.stop();
+                    Speech.speak(cleanForSpeech(data.answer), {
+                        voice: selectedVoice,
+                        rate: 0.9,
+                        pitch: 1.0,
+                        volume: 1.0,
+                    });
+
                 }
             }
 
@@ -481,81 +325,294 @@ export default function ChefScreen() {
             setIsProcessing(false);
         }
     }
+    const finishCooking = async () => {
+        try {
+            // Stop any speaking immediately
+            await Speech.stop();
+
+            // If currently recording, stop it safely
+            if (recording) {
+                try {
+                    await recording.stopAndUnloadAsync();
+                } catch { }
+                setRecording(null);
+            }
+
+            // Mark session inactive (and optionally reset)
+            await supabase
+                .from("cooking_sessions")
+                .update({
+                    is_active: false,
+                    last_updated: new Date().toISOString(),
+                    // optional resets:
+                    // current_step: 0,
+                    // chat_history: [],
+                })
+                .eq("recipe_id", id);
+
+            // Optional local reset so UI doesn't briefly show old state
+            setCurrentStep(0);
+            setMessages([]);
+            setShowChat(false);
+            setShowIngredients(false);
+
+            // Navigate out
+            //router.back(); // or router.replace("/(tabs)") or router.push("/(tabs)")
+            router.replace("/(tabs)")
+        } catch (e) {
+            console.error("finishCooking error:", e);
+            // even if db update fails, still exit so the user isn't stuck
+            router.back();
+        }
+    };
+
+
+    if (!recipe) return <View className="flex-1 bg-white" />;
+    const instructions: string[] = Array.isArray(recipe.instructions) ? recipe.instructions : [];
+    const ingredients: string[] = Array.isArray(recipe.ingredients) ? recipe.ingredients : [];
+    const totalSteps = instructions.length;
+
+    // clamp currentStep so it never goes out of range
+    const safeStep = totalSteps > 0 ? Math.min(Math.max(currentStep, 0), totalSteps - 1) : 0;
 
     return (
         <View className="flex-1 bg-white">
-            {/* Header with Mute & Ingredients Toggle */}
-            <View className="flex-row justify-between items-center px-6 pt-14 pb-4 border-b border-gray-100">
-                <TouchableOpacity onPress={() => setShowIngredients(!showIngredients)} className="flex-row items-center bg-gray-100 px-3 py-2 rounded-full">
-                    <List size={18} color="#333" />
-                    <Text className="ml-2 font-bold">Ingredients</Text>
+            {/* CLEAN HEADER: Fixed spacing to prevent overlap */}
+            <View className="px-8 pt-16 pb-4 flex-row justify-between items-center bg-white z-20">
+                <TouchableOpacity
+                    onPress={() => setShowIngredients(true)}
+                    className="flex-row items-center bg-slate-50 px-4 py-2 rounded-2xl border border-slate-100"
+                >
+                    <List size={20} color="#64748B" />
+                    <Text className="ml-2 font-bold text-slate-600">Ingredients</Text>
                 </TouchableOpacity>
 
-                <TouchableOpacity onPress={() => setIsMuted(!isMuted)} className="p-2 bg-gray-100 rounded-full">
-                    {isMuted ? <VolumeX size={24} color="#FF6347" /> : <Volume2 size={24} color="#10b981" />}
-                </TouchableOpacity>
-            </View>
+                {/* <View className="items-center">
+                    <Text className="text-slate-400 font-bold uppercase tracking-widest text-[10px]">{totalSteps > 0
+                        ? `Step ${safeStep + 1} of ${totalSteps}`
+                        : `No steps found`}
+                    </Text>
+                </View> */}
 
-            <ScrollView ref={scrollRef} className="flex-1" contentContainerStyle={{ paddingBottom: 150 }}>
-                {/* Ingredient Overlay */}
-                {showIngredients && (
-                    <View className="bg-gray-50 p-6 mx-6 mt-4 rounded-3xl border border-gray-100">
-                        <Text className="font-bold text-lg mb-2">Ingredients</Text>
-                        {recipe.ingredients.map((item: string, i: number) => (
-                            <Text key={i} className="text-gray-600 py-1">• {item}</Text>
-                        ))}
-                    </View>
-                )}
+                {/* <TouchableOpacity onPress={() => setIsMuted(!isMuted)} className="p-3 bg-slate-50 rounded-2xl">
+                    {isMuted ? <VolumeX size={20} color="#EF4444" /> : <Volume2 size={20} color="#10b981" />}
+                </TouchableOpacity> */}
+                <View className="flex-row items-center space-x-2">
+                    <TouchableOpacity
+                        onPress={() => setIsMuted(!isMuted)}
+                        className="p-3 bg-slate-50 rounded-2xl"
+                    >
+                        {isMuted ? <VolumeX size={20} color="#EF4444" /> : <Volume2 size={20} color="#10b981" />}
+                    </TouchableOpacity>
 
-                {/* Conversation History Area */}
-                <View className="px-6 mt-6">
-                    <Text className="text-xs font-bold text-gray-300 uppercase tracking-widest mb-4">Conversation</Text>
-                    {messages.map((m, i) => (
-                        <View key={i} className={`mb-4 p-4 rounded-2xl max-w-[85%] ${m.role === 'user' ? 'bg-primary/10 self-end' : 'bg-gray-100 self-start'}`}>
-                            <Text className="text-gray-800">{m.text}</Text>
-                        </View>
-                    ))}
+                    <TouchableOpacity
+                        onPress={finishCooking}
+                        className="p-3 bg-red-500 rounded-2xl shadow-sm active:bg-red-600"
+
+                    >
+                        <Text className="text-slate-600 font-bold text-xs">Finish</Text>
+                    </TouchableOpacity>
                 </View>
 
-                {/* CURRENT STEP (The Main Stage) */}
-                <View className="px-6 mt-8">
-                    <Text className="text-primary font-bold text-xl mb-2">Step {currentStep + 1} of {recipe.instructions.length}</Text>
-                    <View className="bg-primary/5 p-8 rounded-[40px] border border-primary/10">
-                        <Text className="text-2xl leading-10 text-accent font-medium">
-                            {recipe.instructions[currentStep]}
+            </View>
+            <View className="px-8 pt-2 pb-2 justify-between items-center bg-white z-20">
+                <View className="items-center">
+                    <Text className="text-slate-400 font-bold uppercase tracking-widest text-[10px] ">{totalSteps > 0
+                        ? `Step ${safeStep + 1} of ${totalSteps}`
+                        : `No steps found`}
+                    </Text>
+                </View>
+            </View>
+
+            {/* THE STAGE: Improved text scaling and spacing */}
+            <View className="flex-1 px-8 items-center justify-center">
+                <View className="h-2/3 justify-center w-full">
+                    <Text
+                        adjustsFontSizeToFit
+                        minimumFontScale={0.6}
+                        numberOfLines={10}
+                        className="text-5xl font-black text-slate-900 leading-[54px] text-center tracking-tight"
+                    >
+                        {/* {recipe.instructions[currentStep]} */}
+                        {/* {instructions[safeStep]} */}
+                        {totalSteps > 0
+                            ? instructions[safeStep]
+                            : "No instructions were found for this recipe. You can re-import or edit it."}
+
+                    </Text>
+                </View>
+
+                {/* NEXT PREVIEW: Tighter positioning */}
+                <View className="h-12 mt-2 justify-center">
+                    {/* {safeStep < instructions.length - 1 && (
+                        <Text className="text-slate-300 font-semibold text-center italic text-base">
+                            Next: {instructions[safeStep + 1].substring(0, 50)}...
                         </Text>
+                    )} */}
+                    {totalSteps > 0 && safeStep < totalSteps - 1 && (
+                        <Text className="text-slate-300 font-semibold text-center italic text-base">
+                            Next: {instructions[safeStep + 1].substring(0, 50)}...
+                        </Text>
+                    )}
+
+                </View>
+            </View>
+
+            {/* FOOTER CONTROLS */}
+            <View className="pb-16 items-center">
+                <TouchableOpacity
+                    onPress={() => setShowChat(true)} // This ensures the modal opens
+                    className="mb-6 flex-row items-center bg-slate-100 px-6 py-3 rounded-full border border-slate-200"
+                >
+                    <MessageCircle color="#64748B" size={18} />
+                    <Text className="text-slate-600 font-bold ml-2 text-base">View Chat</Text>
+                </TouchableOpacity>
+
+                {/* <TouchableOpacity
+                    onLongPress={async () => {
+                        try {
+                            const permission = await Audio.requestPermissionsAsync();
+                            if (permission.status !== 'granted') return;
+
+                            await Audio.setAudioModeAsync({
+                                allowsRecordingIOS: true,
+                                playsInSilentModeIOS: true,
+                            });
+
+                            await Speech.stop();
+                            const { recording } = await Audio.Recording.createAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
+                            setRecording(recording);
+                            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                        } catch (err) {
+                            console.error('Failed to start recording', err);
+                        }
+                    }}
+                    onPressOut={stopRecording}
+                    className={`h-24 w-24 rounded-full items-center justify-center shadow-xl ${recording ? 'bg-red-500 scale-110' : 'bg-primary'}`}
+                >
+                    <Mic color="white" size={32} />
+                </TouchableOpacity> */}
+                <Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
+                    <TouchableOpacity
+                        disabled={isProcessing} // prevents accidental double submits
+                        onLongPress={async () => {
+                            try {
+                                const permission = await Audio.requestPermissionsAsync();
+                                if (permission.status !== 'granted') return;
+
+                                // await Audio.setAudioModeAsync({
+                                //     allowsRecordingIOS: true,
+                                //     playsInSilentModeIOS: true,
+                                // });
+                                await setRecordingAudioMode();
+
+
+                                await Speech.stop();
+                                const { recording } = await Audio.Recording.createAsync(
+                                    Audio.RecordingOptionsPresets.HIGH_QUALITY
+                                );
+                                setRecording(recording);
+                                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                            } catch (err) {
+                                console.error('Failed to start recording', err);
+                            }
+                        }}
+                        onPressOut={stopRecording}
+                        className={`h-24 w-24 rounded-full items-center justify-center shadow-xl ${recording ? 'bg-red-500' : isProcessing ? 'bg-slate-400' : 'bg-primary'
+                            }`}
+                    >
+                        <Mic color="white" size={32} />
+                    </TouchableOpacity>
+                </Animated.View>
+
+                <Text className="mt-4 text-slate-300 font-bold text-[10px] tracking-widest uppercase">
+                    {recording ? 'Listening' : isProcessing ? 'Thinking' : 'Hold to Talk'}
+                </Text>
+            </View>
+
+            {/* INGREDIENTS MODAL */}
+            <Modal visible={showIngredients} animationType="fade" transparent>
+                <View className="flex-1 bg-slate-900/50 justify-center px-8">
+                    <View className="bg-white rounded-[40px] p-8 max-h-[70%]">
+                        <View className="flex-row justify-between items-center mb-6">
+                            <Text className="text-2xl font-bold text-slate-900">Ingredients</Text>
+                            <TouchableOpacity onPress={() => setShowIngredients(false)} className="bg-slate-100 p-2 rounded-full">
+                                <X size={20} color="#64748B" />
+                            </TouchableOpacity>
+                        </View>
+                        <ScrollView showsVerticalScrollIndicator={false}>
+                            {/* {recipe.ingredients.map((item: string, i: number) => (
+                                <Text key={i} className="text-lg text-slate-600 py-3 border-b border-slate-50">• {item}</Text>
+                            ))} */}
+                            {ingredients.length === 0 ? (
+                                <Text className="text-slate-500">No ingredients found.</Text>
+                            ) : (
+                                ingredients.map((item: string, i: number) => (
+                                    <Text key={i} className="text-lg text-slate-600 py-3 border-b border-slate-50">
+                                        • {item}
+                                    </Text>
+                                ))
+                            )}
+
+                        </ScrollView>
                     </View>
                 </View>
-            </ScrollView>
+            </Modal>
 
-            {/* Floating Bottom Controls */}
-            <View className="absolute bottom-10 w-full px-10">
-                <TouchableOpacity
-                    className={`h-24 rounded-full flex-row items-center justify-center shadow-xl ${isProcessing ? 'bg-gray-400' : 'bg-accent'}`}
-                    onLongPress={() => {/* Start Recording logic */ }}
-                    onPressOut={() => {/* Stop Recording logic */ }}
-                >
-                    <Mic color="white" size={32} />
-                    <Text className="text-white text-xl font-bold ml-4">
-                        {isProcessing ? 'Thinking...' : 'Hold to Talk'}
-                    </Text>
-                </TouchableOpacity>
-            </View>
-            <View className="absolute bottom-10 w-full px-10">
-                <TouchableOpacity
-                    onLongPress={startRecording} // Press and hold starts
-                    onPressOut={stopRecording}   // Release stops
-                    delayLongPress={50}          // Makes it feel instant
-                    disabled={isProcessing}
-                    className={`h-24 rounded-full flex-row items-center justify-center shadow-xl ${recording ? 'bg-red-500 scale-105' : 'bg-accent'
-                        } ${isProcessing ? 'opacity-50' : ''}`}
-                >
-                    <Mic color="white" size={32} />
-                    <Text className="text-white text-xl font-bold ml-4">
-                        {recording ? 'Listening...' : isProcessing ? 'Thinking...' : 'Hold to Talk'}
-                    </Text>
-                </TouchableOpacity>
-            </View>
+            {/* CHAT MODAL (Logic remains, styles updated for "Professional" look) */}
+            {/* ... [Chat Modal remains similar but use messages state] ... */}
+            {/* --- CHAT MODAL --- */}
+            <Modal
+                visible={showChat}
+                animationType="slide"
+                transparent={true}
+                onRequestClose={() => setShowChat(false)} // Required for Android back button
+            >
+                <View className="flex-1 justify-end bg-black/50">
+                    <View className="bg-white rounded-t-[40px] h-[80%] shadow-2xl">
+                        {/* Modal Header */}
+                        <View className="flex-row justify-between items-center px-8 py-6 border-b border-slate-100">
+                            <View>
+                                <Text className="text-2xl font-bold text-slate-900">Sous Chef</Text>
+                                <Text className="text-slate-400 text-xs uppercase font-bold tracking-widest">Session History</Text>
+                            </View>
+                            <TouchableOpacity
+                                onPress={() => setShowChat(false)}
+                                className="bg-slate-100 p-2 rounded-full"
+                            >
+                                <X size={24} color="#64748B" />
+                            </TouchableOpacity>
+                        </View>
+
+                        {/* Message List */}
+                        <ScrollView
+                            ref={scrollRef}
+                            className="flex-1 p-6"
+                            contentContainerStyle={{ paddingBottom: 60 }}
+                            onContentSizeChange={() => {
+                                if (showChat) scrollToBottom();
+                            }}
+                        >
+                            {messages.length === 0 ? (
+                                <View className="items-center mt-20">
+                                    <MessageCircle size={48} color="#CBD5E1" />
+                                    <Text className="text-slate-400 mt-4 font-medium">No messages in this session yet.</Text>
+                                </View>
+                            ) : (
+                                messages.map((m, i) => (
+                                    <View key={i} className={`mb-6 p-5 rounded-[24px] max-w-[85%] ${m.role === 'user' ? 'bg-primary/10 self-end rounded-tr-none' : 'bg-slate-100 self-start rounded-tl-none'
+                                        }`}>
+                                        <Text className="text-slate-400 text-[10px] font-bold uppercase mb-1">
+                                            {m.role === 'user' ? 'You' : 'Chef'}
+                                        </Text>
+                                        <Text className="text-slate-800 text-lg leading-6">{m.text}</Text>
+                                    </View>
+                                ))
+                            )}
+                        </ScrollView>
+                    </View>
+                </View>
+            </Modal>
         </View>
     );
 }
